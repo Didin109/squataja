@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function signedIn(){ return request.auth != null; }
+  function own(uid){ return signedIn() && request.auth.uid == uid; }
+  function admin(){ return signedIn() && request.auth.token.admin == true; }
+  match /users/{uid} {
+   allow read: if own(uid) || admin();
+   allow create: if own(uid) && request.resource.data.email == request.auth.token.email;
+   allow update: if own(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nickname','lastPostAt']);
+   allow delete: if admin();
+  }
+  match /posts/{postId} {
+   // Postingan dan isi forum dapat dibaca publik, termasuk pengunjung yang belum login.
+   allow read: if true;
+   allow create: if signedIn()
+    && request.resource.data.ownerUid == request.auth.uid
+    && request.resource.data.forumType in ['squad','member']
+    && request.resource.data.tag in ['kompe','lucu','havefun']
+    && request.resource.data.nickname is string
+    && request.resource.data.requirements is string
+    && request.resource.data.requirements.size() > 0
+    && request.resource.data.requirements.size() <= 500
+    && request.resource.data.note is string
+    && request.resource.data.likeCount == 0
+    && request.resource.data.done == false
+    && request.resource.data.createdAt == request.time
+    && (request.resource.data.forumType == 'member'
+        || (request.resource.data.squadShortName is string
+            && request.resource.data.squadShortName.size() > 0
+            && request.resource.data.squadShortName.size() <= 12
+            && request.resource.data.squadFullName is string
+            && request.resource.data.squadFullName.size() > 0
+            && request.resource.data.squadFullName.size() <= 60))
+    && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastPostAt == request.time
+    && (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastPostAt == null
+       || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.lastPostAt <= request.time - duration.value(5, 'm'));
+   allow update: if signedIn() && (
+     (resource.data.ownerUid == request.auth.uid
+       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['done'])
+       && request.resource.data.done == true)
+     || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount'])
+       && ((request.resource.data.likeCount == resource.data.likeCount + 1
+            && !exists(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)))
+         || (request.resource.data.likeCount == resource.data.likeCount - 1
+            && exists(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid))
+            && !existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid)))))
+   );
+   allow delete: if admin() || (signedIn() && resource.data.ownerUid == request.auth.uid);
+   match /replies/{replyId} {
+    allow read: if true;
+    allow create: if signedIn() && request.resource.data.authorUid == request.auth.uid
+      && request.resource.data.text is string && request.resource.data.text.size() > 0
+      && request.resource.data.text.size() <= 500
+      && request.resource.data.createdAt == request.time;
+    allow update: if signedIn() && resource.data.authorUid == request.auth.uid;
+    allow delete: if admin() || (signedIn() && resource.data.authorUid == request.auth.uid);
+   }
+   match /likes/{uid} {
+    allow read: if signedIn() && (own(uid) || admin());
+    allow create: if own(uid) && request.resource.data.uid == request.auth.uid;
+    allow delete: if own(uid) || admin();
+   }
+  }
+ }
+}
